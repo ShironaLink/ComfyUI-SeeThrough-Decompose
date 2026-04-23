@@ -357,32 +357,79 @@ class STR_UpscaleFolder:
 
 
 # ---------------------------------------------------------------------------
-# Node 4: High-res mask transfer + decompose
+# Node 4: Direct See-through integration + HiRes decompose
 # ---------------------------------------------------------------------------
+def _extract_parts_from_seethrough(parts_obj):
+    """
+    Extract part images and metadata from SEETHROUGH_PARTS object.
+    Handles multiple possible internal structures.
+    """
+    extracted = []
+
+    # Try common attribute patterns
+    tag2pinfo = None
+    if hasattr(parts_obj, "tag2pinfo"):
+        tag2pinfo = parts_obj.tag2pinfo
+    elif hasattr(parts_obj, "parts"):
+        tag2pinfo = parts_obj.parts
+    elif hasattr(parts_obj, "part_dict_list"):
+        tag2pinfo = {p["tag"]: p for p in parts_obj.part_dict_list}
+    elif isinstance(parts_obj, dict):
+        tag2pinfo = parts_obj
+
+    if tag2pinfo is None:
+        # Last resort: iterate attributes
+        for attr_name in dir(parts_obj):
+            if attr_name.startswith("_"):
+                continue
+            val = getattr(parts_obj, attr_name)
+            if isinstance(val, dict) and len(val) > 0:
+                first_v = next(iter(val.values()))
+                if isinstance(first_v, dict) and "img" in first_v:
+                    tag2pinfo = val
+                    break
+
+    if tag2pinfo is None:
+        raise ValueError(
+            f"Cannot extract parts from SEETHROUGH_PARTS. "
+            f"Object type: {type(parts_obj)}, attrs: {dir(parts_obj)}"
+        )
+
+    if isinstance(tag2pinfo, dict):
+        for tag, info in tag2pinfo.items():
+            img = info.get("img") if isinstance(info, dict) else getattr(info, "img", None)
+            depth = info.get("depth_median", 0.5) if isinstance(info, dict) else getattr(info, "depth_median", 0.5)
+            if img is not None:
+                extracted.append({"tag": tag, "img": img, "depth_median": depth})
+    elif isinstance(tag2pinfo, list):
+        for info in tag2pinfo:
+            tag = info.get("tag", "unknown") if isinstance(info, dict) else getattr(info, "tag", "unknown")
+            img = info.get("img") if isinstance(info, dict) else getattr(info, "img", None)
+            depth = info.get("depth_median", 0.5) if isinstance(info, dict) else getattr(info, "depth_median", 0.5)
+            if img is not None:
+                extracted.append({"tag": tag, "img": img, "depth_median": depth})
+
+    return extracted
+
+
 class STR_HiResDecompose:
     """
-    Apply See-through's low-res masks to the original high-res image,
-    then decompose each part into lineart/flat/highlight/shadow.
-    Original pixel quality is fully preserved.
+    Takes SEETHROUGH_PARTS + original IMAGE directly from See-through pipeline.
+    Applies low-res masks to original high-res image, then decomposes
+    each part into lineart/flat/highlight/shadow.
 
-    Flow:
-      See-through parts (1280px) -> extract masks
-      Original image (3000px+)   -> apply upscaled masks -> high-res parts
-      High-res parts             -> decompose -> PSD
+    Connect:
+      LoadImage.IMAGE ---------> image (original full-res)
+      PostProcess.parts -------> parts (SEETHROUGH_PARTS, 1280px masks)
+      Output: decomposed_data -> STR_SaveDecomposedPSD
     """
 
     @classmethod
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "original_image_path": (
-                    "STRING",
-                    {"default": ""},
-                ),
-                "seethrough_parts_dir": (
-                    "STRING",
-                    {"default": ""},
-                ),
+                "image": ("IMAGE",),
+                "parts": ("SEETHROUGH_PARTS",),
                 "edge_blur": (
                     "INT",
                     {"default": 3, "min": 0, "max": 10, "step": 1},
@@ -412,65 +459,56 @@ class STR_HiResDecompose:
     CATEGORY = "SeeThrough-Re"
 
     def hires_decompose(
-        self,
-        original_image_path,
-        seethrough_parts_dir,
-        edge_blur,
-        blur_size,
-        canny_low,
-        canny_high,
-        brightness_threshold,
+        self, image, parts, edge_blur, blur_size,
+        canny_low, canny_high, brightness_threshold,
     ):
-        if not os.path.isfile(original_image_path):
-            raise ValueError(f"Original image not found: {original_image_path}")
-        if not os.path.isdir(seethrough_parts_dir):
-            raise ValueError(f"Parts directory not found: {seethrough_parts_dir}")
+        from .mask_transfer import upscale_mask, apply_mask_to_original
 
-        # Load depth info from JSON
-        depth_info = {}
-        for f in os.listdir(seethrough_parts_dir):
-            if f.endswith(".json"):
-                json_path = os.path.join(seethrough_parts_dir, f)
-                try:
-                    with open(json_path, "r", encoding="utf-8") as jf:
-                        data = json.load(jf)
-                    if "parts" in data:
-                        for tag, info in data["parts"].items():
-                            if "depth_median" in info:
-                                depth_info[tag] = info["depth_median"]
-                except (json.JSONDecodeError, KeyError):
-                    pass
+        # Get original image at full resolution from ComfyUI IMAGE tensor
+        orig_np = image[0].cpu().numpy()
+        orig_np = (orig_np * 255).clip(0, 255).astype(np.uint8)
+        if orig_np.shape[2] == 3:
+            alpha = np.full((*orig_np.shape[:2], 1), 255, dtype=np.uint8)
+            orig_np = np.concatenate([orig_np, alpha], axis=2)
+        orig_h, orig_w = orig_np.shape[:2]
 
-        # Transfer masks to original high-res image
-        hires_parts = transfer_masks_to_original(
-            original_image_path, seethrough_parts_dir, edge_blur=edge_blur
-        )
-
-        original = Image.open(original_image_path).convert("RGBA")
-        orig_h, orig_w = np.array(original).shape[:2]
-
+        # Extract parts from SEETHROUGH_PARTS
+        st_parts = _extract_parts_from_seethrough(parts)
         print(
-            f"[SeeThrough-Decompose] HiRes: {len(hires_parts)} parts "
-            f"at {orig_w}x{orig_h} (original resolution)"
+            f"[SeeThrough-Decompose] HiRes: {len(st_parts)} parts, "
+            f"original {orig_w}x{orig_h}"
         )
 
-        # Decompose each high-res part
+        # Process each part: transfer mask to original, then decompose
         parts_list = []
-        for part in hires_parts:
+        for sp in st_parts:
+            part_img = sp["img"]  # RGBA numpy from See-through (1280px)
+            mask = part_img[:, :, 3]
+
+            # Upscale mask to original resolution
+            mask_hires = upscale_mask(mask, orig_h, orig_w, edge_blur=edge_blur)
+
+            # Apply mask to original image
+            hires_part = apply_mask_to_original(orig_np, mask_hires)
+
+            # Skip if mostly transparent
+            if hires_part[:, :, 3].max() < 10:
+                continue
+
+            # Decompose
             result = decompose_layer(
-                part["img"],
+                hires_part,
                 blur_size=blur_size,
                 canny_low=canny_low,
                 canny_high=canny_high,
                 brightness_threshold=brightness_threshold,
             )
-            parts_list.append(
-                {
-                    "tag": part["tag"],
-                    "layers": result,
-                    "depth_median": depth_info.get(part["tag"], 0.5),
-                }
-            )
+
+            parts_list.append({
+                "tag": sp["tag"],
+                "layers": result,
+                "depth_median": sp.get("depth_median", 0.5),
+            })
 
         # Build preview
         preview = np.zeros((orig_h, orig_w, 4), dtype=np.uint8)
@@ -479,15 +517,15 @@ class STR_HiResDecompose:
             flat = part["layers"]["flat"]
             fh, fw = flat.shape[:2]
             region = preview[:fh, :fw]
-            flat_alpha = flat[:, :, 3:4].astype(np.float32) / 255.0
+            a = flat[:, :, 3:4].astype(np.float32) / 255.0
             region[:] = (
-                region.astype(np.float32) * (1 - flat_alpha)
-                + flat.astype(np.float32) * flat_alpha
+                region.astype(np.float32) * (1 - a)
+                + flat.astype(np.float32) * a
             ).astype(np.uint8)
 
-        preview_tensor = (
-            torch.from_numpy(preview.astype(np.float32) / 255.0).unsqueeze(0)
-        )
+        preview_tensor = torch.from_numpy(
+            preview.astype(np.float32) / 255.0
+        ).unsqueeze(0)
 
         decomposed = DecomposedPartsData(parts_list, orig_h, orig_w)
         return (decomposed, preview_tensor)

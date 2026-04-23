@@ -1,0 +1,262 @@
+{
+  "id": "seethrough-decompose-full",
+  "revision": 0,
+  "last_node_id": 35,
+  "last_link_id": 32,
+  "nodes": [
+    {
+      "id": 27,
+      "type": "LoadImage",
+      "pos": [100, 200],
+      "size": [300, 340],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {"name": "IMAGE", "type": "IMAGE", "links": [22, 30]},
+        {"name": "MASK", "type": "MASK", "links": null}
+      ],
+      "properties": {"Node name for S&R": "LoadImage"},
+      "widgets_values": ["input.png", "image"],
+      "title": "元イラスト読み込み"
+    },
+    {
+      "id": 26,
+      "type": "SeeThrough_LoadLayerDiffModel",
+      "pos": [100, 620],
+      "size": [340, 240],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {"name": "layerdiff_model", "type": "SEETHROUGH_LAYERDIFF_MODEL", "links": [21]}
+      ],
+      "properties": {"Node name for S&R": "SeeThrough_LoadLayerDiffModel"},
+      "widgets_values": [
+        "layerdifforg/seethroughv0.0.2_layerdiff3d",
+        "", "", true, false
+      ],
+      "title": "LayerDiffモデル (bf16)"
+    },
+    {
+      "id": 25,
+      "type": "SeeThrough_LoadDepthModel",
+      "pos": [100, 940],
+      "size": [320, 170],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {"name": "depth_model", "type": "SEETHROUGH_DEPTH_MODEL", "links": [20]}
+      ],
+      "properties": {"Node name for S&R": "SeeThrough_LoadDepthModel"},
+      "widgets_values": [
+        "layerdifforg/seethroughv0.0.1_marigold",
+        true, false
+      ],
+      "title": "Depthモデル (bf16)"
+    },
+    {
+      "id": 24,
+      "type": "SeeThrough_GenerateLayers",
+      "pos": [540, 200],
+      "size": [300, 200],
+      "flags": {},
+      "order": 3,
+      "mode": 0,
+      "inputs": [
+        {"name": "image", "type": "IMAGE", "link": 22},
+        {"name": "layerdiff_model", "type": "SEETHROUGH_LAYERDIFF_MODEL", "link": 21}
+      ],
+      "outputs": [
+        {"name": "layers", "type": "SEETHROUGH_LAYERS", "links": [19]},
+        {"name": "preview", "type": "IMAGE", "links": [23]}
+      ],
+      "properties": {"Node name for S&R": "SeeThrough_GenerateLayers"},
+      "widgets_values": [42, "fixed", 1280, 30],
+      "title": "レイヤー生成 (1280px)"
+    },
+    {
+      "id": 23,
+      "type": "SeeThrough_GenerateDepth",
+      "pos": [540, 480],
+      "size": [300, 180],
+      "flags": {},
+      "order": 4,
+      "mode": 0,
+      "inputs": [
+        {"name": "layers", "type": "SEETHROUGH_LAYERS", "link": 19},
+        {"name": "depth_model", "type": "SEETHROUGH_DEPTH_MODEL", "link": 20}
+      ],
+      "outputs": [
+        {"name": "layers_depth", "type": "SEETHROUGH_LAYERS_DEPTH", "links": [18]},
+        {"name": "preview", "type": "IMAGE", "links": [24]}
+      ],
+      "properties": {"Node name for S&R": "SeeThrough_GenerateDepth"},
+      "widgets_values": [42, "fixed", -1],
+      "title": "深度マップ生成"
+    },
+    {
+      "id": 20,
+      "type": "SeeThrough_PostProcess",
+      "pos": [940, 200],
+      "size": [280, 160],
+      "flags": {},
+      "order": 5,
+      "mode": 0,
+      "inputs": [
+        {"name": "layers_depth", "type": "SEETHROUGH_LAYERS_DEPTH", "link": 18}
+      ],
+      "outputs": [
+        {"name": "parts", "type": "SEETHROUGH_PARTS", "links": [16, 29]},
+        {"name": "preview", "type": "IMAGE", "links": [17]}
+      ],
+      "properties": {"Node name for S&R": "SeeThrough_PostProcess"},
+      "widgets_values": [true, true],
+      "title": "後処理 (左右分割ON)"
+    },
+    {
+      "id": 21,
+      "type": "SeeThrough_SavePSD",
+      "pos": [940, 440],
+      "size": [280, 170],
+      "flags": {},
+      "order": 6,
+      "mode": 0,
+      "inputs": [
+        {"name": "parts", "type": "SEETHROUGH_PARTS", "link": 16}
+      ],
+      "outputs": [
+        {"name": "info_file", "type": "STRING", "links": null}
+      ],
+      "properties": {"Node name for S&R": "SeeThrough_SavePSD"},
+      "widgets_values": ["shirona_seethrough", "Download PSD", "Download Depth PSD"],
+      "title": "See-through PSD保存"
+    },
+    {
+      "id": 31,
+      "type": "STR_HiResDecompose",
+      "pos": [1340, 200],
+      "size": [350, 300],
+      "flags": {},
+      "order": 7,
+      "mode": 0,
+      "inputs": [
+        {"name": "image", "type": "IMAGE", "link": 30},
+        {"name": "parts", "type": "SEETHROUGH_PARTS", "link": 29}
+      ],
+      "outputs": [
+        {"name": "decomposed_data", "type": "STR_DECOMPOSED_DATA", "links": [31]},
+        {"name": "preview", "type": "IMAGE", "links": [32]}
+      ],
+      "properties": {},
+      "widgets_values": [3, 10, 50, 150, 5],
+      "title": "HiRes 線画/塗り/影/HL分解"
+    },
+    {
+      "id": 32,
+      "type": "STR_SaveDecomposedPSD",
+      "pos": [1780, 200],
+      "size": [350, 120],
+      "flags": {},
+      "order": 8,
+      "mode": 0,
+      "inputs": [
+        {"name": "decomposed_data", "type": "STR_DECOMPOSED_DATA", "link": 31}
+      ],
+      "outputs": [
+        {"name": "psd_path", "type": "STRING", "links": null}
+      ],
+      "properties": {},
+      "widgets_values": ["/workspace/runpod-slim/ComfyUI/output/decomposed.psd"],
+      "title": "分解PSD保存"
+    },
+    {
+      "id": 33,
+      "type": "PreviewImage",
+      "pos": [1780, 400],
+      "size": [350, 350],
+      "flags": {},
+      "order": 9,
+      "mode": 0,
+      "inputs": [
+        {"name": "images", "type": "IMAGE", "link": 32}
+      ],
+      "outputs": [],
+      "properties": {},
+      "title": "分解プレビュー"
+    },
+    {
+      "id": 22,
+      "type": "PreviewImage",
+      "pos": [940, 680],
+      "size": [280, 280],
+      "flags": {},
+      "order": 10,
+      "mode": 0,
+      "inputs": [
+        {"name": "images", "type": "IMAGE", "link": 17}
+      ],
+      "outputs": [],
+      "properties": {},
+      "title": "パーツ分解プレビュー"
+    },
+    {
+      "id": 28,
+      "type": "PreviewImage",
+      "pos": [540, 740],
+      "size": [280, 280],
+      "flags": {},
+      "order": 11,
+      "mode": 0,
+      "inputs": [
+        {"name": "images", "type": "IMAGE", "link": 23}
+      ],
+      "outputs": [],
+      "properties": {},
+      "title": "レイヤープレビュー"
+    },
+    {
+      "id": 29,
+      "type": "PreviewImage",
+      "pos": [540, 1080],
+      "size": [280, 280],
+      "flags": {},
+      "order": 12,
+      "mode": 0,
+      "inputs": [
+        {"name": "images", "type": "IMAGE", "link": 24}
+      ],
+      "outputs": [],
+      "properties": {},
+      "title": "深度マッププレビュー"
+    }
+  ],
+  "links": [
+    [16, 20, 0, 21, 0, "SEETHROUGH_PARTS"],
+    [17, 20, 1, 22, 0, "IMAGE"],
+    [18, 23, 0, 20, 0, "SEETHROUGH_LAYERS_DEPTH"],
+    [19, 24, 0, 23, 0, "SEETHROUGH_LAYERS"],
+    [20, 25, 0, 23, 1, "SEETHROUGH_DEPTH_MODEL"],
+    [21, 26, 0, 24, 1, "SEETHROUGH_LAYERDIFF_MODEL"],
+    [22, 27, 0, 24, 0, "IMAGE"],
+    [23, 24, 1, 28, 0, "IMAGE"],
+    [24, 23, 1, 29, 0, "IMAGE"],
+    [29, 20, 0, 31, 1, "SEETHROUGH_PARTS"],
+    [30, 27, 0, 31, 0, "IMAGE"],
+    [31, 31, 0, 32, 0, "STR_DECOMPOSED_DATA"],
+    [32, 31, 1, 33, 0, "IMAGE"]
+  ],
+  "groups": [
+    {"title": "入力 & モデル", "bounding": [60, 140, 420, 1020], "color": "#3f789e"},
+    {"title": "See-through パイプライン", "bounding": [500, 140, 440, 1260], "color": "#2e7d32"},
+    {"title": "See-through 出力", "bounding": [900, 140, 360, 880], "color": "#e65100"},
+    {"title": "HiRes 線画/塗り/影/HL 分解", "bounding": [1300, 140, 880, 680], "color": "#6a1b9a"}
+  ],
+  "config": {},
+  "extra": {"ds": {"scale": 0.7, "offset": [0, 0]}},
+  "version": 0.4
+}
