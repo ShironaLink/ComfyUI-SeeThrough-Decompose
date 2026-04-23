@@ -150,7 +150,7 @@
         {"name": "psd_path", "type": "STRING", "links": null}
       ],
       "properties": {},
-      "widgets_values": ["/workspace/runpod-slim/ComfyUI/output/decomposed.psd"],
+      "widgets_values": ["decomposed"],
       "title": "分解PSD保存"
     },
     {

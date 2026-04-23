@@ -535,16 +535,16 @@ class STR_HiResDecompose:
 # Node 5: Save decomposed data as PSD
 # ---------------------------------------------------------------------------
 class STR_SaveDecomposedPSD:
-    """Save decomposed layers to a PSD file with proper blend modes."""
+    """Save decomposed layers to a PSD file with download support."""
 
     @classmethod
     def INPUT_TYPES(cls):
         return {
             "required": {
                 "decomposed_data": ("STR_DECOMPOSED_DATA",),
-                "output_path": (
+                "filename_prefix": (
                     "STRING",
-                    {"default": "output/decomposed.psd"},
+                    {"default": "decomposed"},
                 ),
             },
         }
@@ -555,11 +555,17 @@ class STR_SaveDecomposedPSD:
     OUTPUT_NODE = True
     CATEGORY = "SeeThrough-Re"
 
-    def save_psd(self, decomposed_data, output_path):
-        # Ensure output directory exists
-        out_dir = os.path.dirname(output_path)
-        if out_dir:
-            os.makedirs(out_dir, exist_ok=True)
+    def save_psd(self, decomposed_data, filename_prefix):
+        try:
+            import folder_paths
+            output_dir = folder_paths.get_output_directory()
+        except ImportError:
+            output_dir = os.path.join(os.getcwd(), "output")
+
+        os.makedirs(output_dir, exist_ok=True)
+
+        filename = f"{filename_prefix}.psd"
+        output_path = os.path.join(output_dir, filename)
 
         save_decomposed_psd(
             decomposed_data.parts_list,
@@ -574,7 +580,38 @@ class STR_SaveDecomposedPSD:
             f"({len(decomposed_data.parts_list)} parts, {layer_count} layers)"
         )
 
-        return (output_path,)
+        return {"ui": {"files": [{"filename": filename, "subfolder": "", "type": "output"}]},
+                "result": (output_path,)}
+
+
+# ---------------------------------------------------------------------------
+# Download API route
+# ---------------------------------------------------------------------------
+try:
+    from server import PromptServer
+    from aiohttp import web
+
+    @PromptServer.instance.routes.get("/str_decompose/download")
+    async def download_psd(request):
+        filename = request.query.get("filename", "decomposed.psd")
+        try:
+            import folder_paths
+            output_dir = folder_paths.get_output_directory()
+        except ImportError:
+            output_dir = os.path.join(os.getcwd(), "output")
+
+        filepath = os.path.join(output_dir, filename)
+        if not os.path.isfile(filepath):
+            return web.Response(text=f"File not found: {filename}", status=404)
+
+        return web.FileResponse(
+            filepath,
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+    print("[SeeThrough-Decompose] Download route registered: /str_decompose/download?filename=decomposed.psd")
+except Exception as e:
+    print(f"[SeeThrough-Decompose] Could not register download route: {e}")
 
 
 # ---------------------------------------------------------------------------
