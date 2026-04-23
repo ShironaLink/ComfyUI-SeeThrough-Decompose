@@ -18,6 +18,7 @@ from PIL import Image
 from .decomposer import decompose_layer
 from .psd_writer import save_decomposed_psd
 from .upscaler import upscale_rgba
+from .mask_transfer import transfer_masks_to_original
 
 
 # ---------------------------------------------------------------------------
@@ -356,7 +357,144 @@ class STR_UpscaleFolder:
 
 
 # ---------------------------------------------------------------------------
-# Node 4: Save decomposed data as PSD
+# Node 4: High-res mask transfer + decompose
+# ---------------------------------------------------------------------------
+class STR_HiResDecompose:
+    """
+    Apply See-through's low-res masks to the original high-res image,
+    then decompose each part into lineart/flat/highlight/shadow.
+    Original pixel quality is fully preserved.
+
+    Flow:
+      See-through parts (1280px) -> extract masks
+      Original image (3000px+)   -> apply upscaled masks -> high-res parts
+      High-res parts             -> decompose -> PSD
+    """
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "original_image_path": (
+                    "STRING",
+                    {"default": ""},
+                ),
+                "seethrough_parts_dir": (
+                    "STRING",
+                    {"default": ""},
+                ),
+                "edge_blur": (
+                    "INT",
+                    {"default": 3, "min": 0, "max": 10, "step": 1},
+                ),
+                "blur_size": (
+                    "INT",
+                    {"default": 10, "min": 1, "max": 50, "step": 1},
+                ),
+                "canny_low": (
+                    "INT",
+                    {"default": 50, "min": 0, "max": 255, "step": 1},
+                ),
+                "canny_high": (
+                    "INT",
+                    {"default": 150, "min": 0, "max": 255, "step": 1},
+                ),
+                "brightness_threshold": (
+                    "INT",
+                    {"default": 5, "min": 1, "max": 50, "step": 1},
+                ),
+            },
+        }
+
+    RETURN_TYPES = ("STR_DECOMPOSED_DATA", "IMAGE")
+    RETURN_NAMES = ("decomposed_data", "preview")
+    FUNCTION = "hires_decompose"
+    CATEGORY = "SeeThrough-Re"
+
+    def hires_decompose(
+        self,
+        original_image_path,
+        seethrough_parts_dir,
+        edge_blur,
+        blur_size,
+        canny_low,
+        canny_high,
+        brightness_threshold,
+    ):
+        if not os.path.isfile(original_image_path):
+            raise ValueError(f"Original image not found: {original_image_path}")
+        if not os.path.isdir(seethrough_parts_dir):
+            raise ValueError(f"Parts directory not found: {seethrough_parts_dir}")
+
+        # Load depth info from JSON
+        depth_info = {}
+        for f in os.listdir(seethrough_parts_dir):
+            if f.endswith(".json"):
+                json_path = os.path.join(seethrough_parts_dir, f)
+                try:
+                    with open(json_path, "r", encoding="utf-8") as jf:
+                        data = json.load(jf)
+                    if "parts" in data:
+                        for tag, info in data["parts"].items():
+                            if "depth_median" in info:
+                                depth_info[tag] = info["depth_median"]
+                except (json.JSONDecodeError, KeyError):
+                    pass
+
+        # Transfer masks to original high-res image
+        hires_parts = transfer_masks_to_original(
+            original_image_path, seethrough_parts_dir, edge_blur=edge_blur
+        )
+
+        original = Image.open(original_image_path).convert("RGBA")
+        orig_h, orig_w = np.array(original).shape[:2]
+
+        print(
+            f"[SeeThrough-Decompose] HiRes: {len(hires_parts)} parts "
+            f"at {orig_w}x{orig_h} (original resolution)"
+        )
+
+        # Decompose each high-res part
+        parts_list = []
+        for part in hires_parts:
+            result = decompose_layer(
+                part["img"],
+                blur_size=blur_size,
+                canny_low=canny_low,
+                canny_high=canny_high,
+                brightness_threshold=brightness_threshold,
+            )
+            parts_list.append(
+                {
+                    "tag": part["tag"],
+                    "layers": result,
+                    "depth_median": depth_info.get(part["tag"], 0.5),
+                }
+            )
+
+        # Build preview
+        preview = np.zeros((orig_h, orig_w, 4), dtype=np.uint8)
+        sorted_parts = sorted(parts_list, key=lambda x: x["depth_median"])
+        for part in sorted_parts:
+            flat = part["layers"]["flat"]
+            fh, fw = flat.shape[:2]
+            region = preview[:fh, :fw]
+            flat_alpha = flat[:, :, 3:4].astype(np.float32) / 255.0
+            region[:] = (
+                region.astype(np.float32) * (1 - flat_alpha)
+                + flat.astype(np.float32) * flat_alpha
+            ).astype(np.uint8)
+
+        preview_tensor = (
+            torch.from_numpy(preview.astype(np.float32) / 255.0).unsqueeze(0)
+        )
+
+        decomposed = DecomposedPartsData(parts_list, orig_h, orig_w)
+        return (decomposed, preview_tensor)
+
+
+# ---------------------------------------------------------------------------
+# Node 5: Save decomposed data as PSD
 # ---------------------------------------------------------------------------
 class STR_SaveDecomposedPSD:
     """Save decomposed layers to a PSD file with proper blend modes."""
@@ -408,6 +546,7 @@ NODE_CLASS_MAPPINGS = {
     "STR_DecomposeLayer": STR_DecomposeLayer,
     "STR_DecomposeFolder": STR_DecomposeFolder,
     "STR_UpscaleFolder": STR_UpscaleFolder,
+    "STR_HiResDecompose": STR_HiResDecompose,
     "STR_SaveDecomposedPSD": STR_SaveDecomposedPSD,
 }
 
@@ -415,5 +554,6 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "STR_DecomposeLayer": "SeeThrough-Re Decompose Layer",
     "STR_DecomposeFolder": "SeeThrough-Re Decompose Folder",
     "STR_UpscaleFolder": "SeeThrough-Re Upscale Folder",
+    "STR_HiResDecompose": "SeeThrough-Re HiRes Decompose",
     "STR_SaveDecomposedPSD": "SeeThrough-Re Save PSD",
 }
