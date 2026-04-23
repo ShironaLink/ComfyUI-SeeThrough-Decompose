@@ -32,8 +32,8 @@ def _save_with_pytoshop(parts_list, output_path, canvas_h, canvas_w):
         "lineart": BlendMode.normal,
     }
 
-    psd = pytoshop.PsdFile(num_channels=4, height=canvas_h, width=canvas_w)
-    psd.header.color_mode = ColorMode.rgb
+    psd = pytoshop.PsdFile(num_channels=4, height=canvas_h, width=canvas_w,
+                           color_mode=ColorMode.rgb)
 
     # Sort parts by depth (back to front)
     sorted_parts = sorted(parts_list, key=lambda x: x.get("depth_median", 0.5))
