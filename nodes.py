@@ -535,7 +535,11 @@ class STR_HiResDecompose:
 # Node 5: Save decomposed data as PSD
 # ---------------------------------------------------------------------------
 class STR_SaveDecomposedPSD:
-    """Save decomposed layers to a PSD file with download support."""
+    """
+    Save decomposed layers as individual PNGs + JSON metadata.
+    Download PSD button (in frontend JS) assembles PSD in the browser,
+    same mechanism as See-through's SavePSD.
+    """
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -550,12 +554,14 @@ class STR_SaveDecomposedPSD:
         }
 
     RETURN_TYPES = ("STRING",)
-    RETURN_NAMES = ("psd_path",)
-    FUNCTION = "save_psd"
+    RETURN_NAMES = ("info_file",)
+    FUNCTION = "save"
     OUTPUT_NODE = True
     CATEGORY = "SeeThrough-Re"
 
-    def save_psd(self, decomposed_data, filename_prefix):
+    def save(self, decomposed_data, filename_prefix):
+        import time
+
         try:
             import folder_paths
             output_dir = folder_paths.get_output_directory()
@@ -564,54 +570,69 @@ class STR_SaveDecomposedPSD:
 
         os.makedirs(output_dir, exist_ok=True)
 
-        filename = f"{filename_prefix}.psd"
-        output_path = os.path.join(output_dir, filename)
+        timestamp = int(time.time())
+        uid = os.getpid()
+        canvas_h = decomposed_data.canvas_h
+        canvas_w = decomposed_data.canvas_w
 
-        save_decomposed_psd(
+        # Sort parts by depth
+        sorted_parts = sorted(
             decomposed_data.parts_list,
-            output_path,
-            decomposed_data.canvas_h,
-            decomposed_data.canvas_w,
+            key=lambda x: x.get("depth_median", 0.5),
         )
 
-        layer_count = len(decomposed_data.parts_list) * 4
+        # Save each layer as PNG + build layer info
+        layer_infos = []
+        sublayer_order = ["flat", "shadow", "highlight", "lineart"]
+
+        for part in sorted_parts:
+            tag = part["tag"]
+            layers_data = part["layers"]
+
+            for layer_type in sublayer_order:
+                img = layers_data.get(layer_type)
+                if img is None:
+                    continue
+
+                layer_name = f"{tag}_{layer_type}"
+                png_filename = f"{filename_prefix}_{timestamp}_{uid}_{layer_name}.png"
+                png_path = os.path.join(output_dir, png_filename)
+
+                Image.fromarray(img, "RGBA").save(png_path)
+
+                layer_infos.append({
+                    "name": layer_name,
+                    "filename": png_filename,
+                    "left": 0,
+                    "top": 0,
+                    "right": img.shape[1],
+                    "bottom": img.shape[0],
+                })
+
+        # Save JSON metadata
+        json_filename = f"{filename_prefix}_{timestamp}_{uid}_layers.json"
+        json_path = os.path.join(output_dir, json_filename)
+        info = {
+            "prefix": filename_prefix,
+            "timestamp": timestamp,
+            "width": canvas_w,
+            "height": canvas_h,
+            "layers": layer_infos,
+        }
+        with open(json_path, "w", encoding="utf-8") as f:
+            json.dump(info, f, ensure_ascii=False, indent=2)
+
+        # Write log file (JS reads this to find latest JSON)
+        log_path = os.path.join(output_dir, "str_decompose_info.log")
+        with open(log_path, "w") as f:
+            f.write(json_filename)
+
         print(
-            f"[SeeThrough-Decompose] Saved PSD: {output_path} "
-            f"({len(decomposed_data.parts_list)} parts, {layer_count} layers)"
+            f"[SeeThrough-Decompose] Saved {len(layer_infos)} layer PNGs + "
+            f"{json_filename} ({canvas_w}x{canvas_h})"
         )
 
-        return {"ui": {"files": [{"filename": filename, "subfolder": "", "type": "output"}]},
-                "result": (output_path,)}
-
-
-# ---------------------------------------------------------------------------
-# Download API route
-# ---------------------------------------------------------------------------
-try:
-    from server import PromptServer
-    from aiohttp import web
-
-    @PromptServer.instance.routes.get("/str_decompose/download")
-    async def download_psd(request):
-        filename = request.query.get("filename", "decomposed.psd")
-        try:
-            import folder_paths
-            output_dir = folder_paths.get_output_directory()
-        except ImportError:
-            output_dir = os.path.join(os.getcwd(), "output")
-
-        filepath = os.path.join(output_dir, filename)
-        if not os.path.isfile(filepath):
-            return web.Response(text=f"File not found: {filename}", status=404)
-
-        return web.FileResponse(
-            filepath,
-            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-        )
-
-    print("[SeeThrough-Decompose] Download route registered: /str_decompose/download?filename=decomposed.psd")
-except Exception as e:
-    print(f"[SeeThrough-Decompose] Could not register download route: {e}")
+        return {"ui": {}, "result": (json_path,)}
 
 
 # ---------------------------------------------------------------------------
